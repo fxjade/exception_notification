@@ -1,18 +1,16 @@
+# frozen_string_literal: true
+
 require 'sidekiq'
 
 # Note: this class is only needed for Sidekiq version < 3.
 module ExceptionNotification
   class Sidekiq
-
-    def call(worker, msg, queue)
-      begin
-        yield
-      rescue Exception => exception
-        ExceptionNotifier.notify_exception(exception, :data => { :sidekiq => msg })
-        raise exception
-      end
+    def call(_worker, msg, _queue)
+      yield
+    rescue Exception => e
+      ExceptionNotifier.notify_exception(e, data: { sidekiq: msg })
+      raise e
     end
-
   end
 end
 
@@ -24,8 +22,8 @@ if ::Sidekiq::VERSION < '3'
   end
 else
   ::Sidekiq.configure_server do |config|
-    config.error_handlers << Proc.new { |ex, context|
-      ExceptionNotifier.notify_exception(ex, :data => { :sidekiq => context })
-    }
+    config.error_handlers << proc do |ex, context|
+      ExceptionNotifier.notify_exception(ex, data: { sidekiq: context })
+    end
   end
 end

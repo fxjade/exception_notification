@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'active_support/core_ext/numeric/time'
 require 'active_support/concern'
 
@@ -25,20 +27,21 @@ module ExceptionNotifier
       end
 
       def error_count(error_key)
-        count = begin
-          error_grouping_cache.read(error_key)
-        rescue => e
-          ExceptionNotifier.logger.warn("#{error_grouping_cache.inspect} failed to read, reason: #{e.message}. Falling back to memory cache store.")
-          fallback_cache_store.read(error_key)
-        end
+        count =
+          begin
+            error_grouping_cache.read(error_key)
+          rescue StandardError => e
+            log_cache_error(error_grouping_cache, e, :read)
+            fallback_cache_store.read(error_key)
+          end
 
-        count.to_i if count
+        count&.to_i
       end
 
       def save_error_count(error_key, count)
         error_grouping_cache.write(error_key, count, expires_in: error_grouping_period)
-      rescue => e
-        ExceptionNotifier.logger.warn("#{error_grouping_cache.inspect} failed to write, reason: #{e.message}. Falling back to memory cache store.")
+      rescue StandardError => e
+        log_cache_error(error_grouping_cache, e, :write)
         fallback_cache_store.write(error_key, count, expires_in: error_grouping_period)
       end
 
@@ -46,13 +49,14 @@ module ExceptionNotifier
         message_based_key = "exception:#{Zlib.crc32("#{exception.class.name}\nmessage:#{exception.message}")}"
         accumulated_errors_count = 1
 
-        if count = error_count(message_based_key)
+        if (count = error_count(message_based_key))
           accumulated_errors_count = count + 1
           save_error_count(message_based_key, accumulated_errors_count)
         else
-          backtrace_based_key = "exception:#{Zlib.crc32("#{exception.class.name}\npath:#{exception.backtrace.try(:first)}")}"
+          backtrace_based_key =
+            "exception:#{Zlib.crc32("#{exception.class.name}\npath:#{exception.backtrace.try(:first)}")}"
 
-          if count = Rails.cache.read(backtrace_based_key)
+          if (count = error_grouping_cache.read(backtrace_based_key))
             accumulated_errors_count = count + 1
             save_error_count(backtrace_based_key, accumulated_errors_count)
           else
@@ -71,6 +75,12 @@ module ExceptionNotifier
           factor = Math.log2(count)
           factor.to_i == factor
         end
+      end
+
+      private
+
+      def log_cache_error(cache, exception, action)
+        "#{cache.inspect} failed to #{action}, reason: #{exception.message}. Falling back to memory cache store."
       end
     end
   end
